@@ -17,8 +17,22 @@ from support import (MODEL, SYSTEM_PROMPT, call_local, execute_tool, mcp_client,
 MAX_TOOL_CALLS = 8  # Larkspur's own build capped the loop here; then a human takes over.
 
 TONE_ADDENDUM = ""                       # ✏️ Build 4, step 4.1, intelligence goal
-EXTRA_TOOLS: List[Dict[str, Any]] = []   # ✏️ Build 2, step 2.1: schemas for the tools you add
-LOCAL_TOOLS: Dict[str, Any] = {}         # ✏️ Build 2, step 2.1: the functions behind them
+EXTRA_TOOLS: List[Dict[str, Any]] = [{
+                "name": "next_available_day",
+                "description": "Retrieve the next available day for a particular booking code (PNR). "
+                "Origin, destination and date are required. Returns the next available booking day.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "origin": {"type": "string", "description": "IATA code of the departure airport, e.g. DEN."},
+                        "dest":   {"type": "string", "description": "IATA code of the arrival airport, e.g. BOI."},
+                        "date":   {"type": "string", "description": "Date to search from, as YYYY-MM-DD, e.g. 2025-05-06."},
+                        "cabin":  {"type": "string", "description": "Cabin class: \"Y\" for economy or \"J\" for business. Defaults to \"Y\"."},
+                    },
+                    "required": ["origin", "dest", "date"],
+                }
+            },]   # ✏️ Build 2, step 2.1: schemas for the tools you add
+LOCAL_TOOLS: Dict[str, Any] = {"next_available_day": next_available_day}       # ✏️ Build 2, step 2.1: the functions behind them
 
 
 def text_of(response) -> str:
