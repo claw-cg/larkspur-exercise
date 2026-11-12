@@ -9,6 +9,7 @@ Where you edit:   grep -n '✏' agent.py   (six marks, one per place)
 Steps and gates:  https://anthropicpartnerbasecamp.bts.com/
 """
 from __future__ import annotations
+from pathlib import Path
 from typing import Any, Dict, List
 from support import (MODEL, SYSTEM_PROMPT, call_local, execute_tool, mcp_client,
                      new_session, next_available_day, record_tool_result,
@@ -17,7 +18,48 @@ from support import (MODEL, SYSTEM_PROMPT, call_local, execute_tool, mcp_client,
 MAX_TOOL_CALLS = 8  # Larkspur's own build capped the loop here; then a human takes over.
 
 TONE_ADDENDUM = ""                       # ✏️ Build 4, step 4.1, intelligence goal
-EXTRA_TOOLS: List[Dict[str, Any]] = [{
+
+HANDBOOK_PATH = Path(__file__).parent / "data" / "americas" / "fare_rules_excerpt.md"
+
+
+def read_from_handbook(section: str) -> str:
+    """Return the text of one Handbook section, matched on its number or on words in its title."""
+    text = HANDBOOK_PATH.read_text(encoding="utf-8")
+    sections = [s for s in text.split("### ")[1:]]          # each starts with its heading line
+    query = section.strip().lower().removeprefix("section").strip(" .")
+    for s in sections:
+        heading = s.splitlines()[0].strip()
+        number = heading.split(".")[0]
+        if query == number or (query and query in heading.lower()):
+            return "### " + s.strip()
+    titles = ", ".join(s.splitlines()[0].strip() for s in sections)
+    return f"No Handbook section matches '{section}'. Available sections: {titles}."
+
+
+EXTRA_TOOLS = [{
+    "name": "fare_rules",
+    "description": (
+        "Call this when the customer asks what rules, limits or conditions apply to their "
+        "fare, or why something is or is not covered. Returns the exact text of one "
+        "section of the Larkspur Handbook; quote it back, do not paraphrase it. This is "
+        "reference text only, not a decision: what the customer is actually owed for a "
+        "disruption comes from check_policy. For a general question about a fare, read "
+        "sections 4, 5 and 6, one call each."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"section": {
+            "type": "string",
+            "description": (
+                "Which Handbook section to read: its number or words from its title. "
+                "Sections: '4' Fare families, '5' When we delay, cancel or divert your "
+                "flight, '6' Care while you wait, '7' What chat automation will not do."
+            ),
+        }},
+        "required": ["section"],
+    },
+},
+{
                 "name": "next_available_day",
                 "description": "Retrieve the next available day for a particular booking code (PNR). "
                 "Origin, destination and date are required. Returns the next available booking day.",
@@ -31,9 +73,9 @@ EXTRA_TOOLS: List[Dict[str, Any]] = [{
                     },
                     "required": ["origin", "dest", "date"],
                 }
-            },]   # ✏️ Build 2, step 2.1: schemas for the tools you add
-LOCAL_TOOLS: Dict[str, Any] = {"next_available_day": next_available_day}       # ✏️ Build 2, step 2.1: the functions behind them
-
+            }
+]
+LOCAL_TOOLS = {"fare_rules": read_from_handbook, "next_available_day": next_available_day}
 
 def text_of(response) -> str:
     """Given. The last non-empty text block, never content[0]."""
@@ -82,13 +124,14 @@ def run_agent(pnr: str, last_name: str, message: str) -> str:            # ✏�
     answer = ""
     turns = 1
     while response.stop_reason == "tool_use" and turns < MAX_TOOL_CALLS:
-        messages.append({"role": "assistant", "content": text_of(response)})
+        messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results(response)})
-        answer = text_of(response)
+        
         response = client.messages.create(
             model=MODEL, max_tokens=4096, system=runtime_preamble() + SYSTEM_PROMPT + TONE_ADDENDUM,
             thinking={"type": "adaptive"}, tools=tools, messages=messages,
         )
+        answer = text_of(response)
         turns += 1
 
     return answer
@@ -133,17 +176,24 @@ def build_tools() -> List[Dict[str, Any]]:                 # ✏️ Build 1, ste
                 "type": "object",
                 "properties": {
                     "flight_no": {"type": "string"},
-                    "date": {"type": "string", "description": "MM/DD/YYYY"},
+                    "date": {"type": "string", "description": "YYYY-MM-DD"},
                 },
                 "required": ["flight_no", "date"],
             },
         },
         {
-            "name": "search_alternatives",
-            "description": "search",
+               "name": "search_alternatives",
+               "description": (
+               "Find alternative flights for the disrupted segment on a booking. Use it "
+                "only after lookup_booking has identified the segment that needs attention "
+                "and get_flight_status has confirmed it is delayed, cancelled or diverted. "
+                "Returns a list of options, each with an option_id, to offer the customer. "
+                "Pass an option_id to hold_seat to hold one, and to check_policy as "
+                "chosen_option_id once the customer picks."
+            ),
             "input_schema": {
                 "type": "object",
-                "properties": {"pnr": {"type": "string"}},
+                "properties": {"pnr": {"type": "string", "description": "The booking's confirmation code (PNR)."}},
                 "required": ["pnr"],
             },
         },
